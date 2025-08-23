@@ -1,63 +1,17 @@
 import datetime
-import io
+import hikari
 from typing import List, Optional
 
 from chat_exporter.construct.transcript import Transcript
-from chat_exporter.ext.discord_import import discord
-from chat_exporter.construct.attachment_handler import AttachmentHandler, AttachmentToLocalFileHostHandler, AttachmentToDiscordChannelHandler
-
-
-async def quick_export(
-    channel: discord.TextChannel,
-    guild: Optional[discord.Guild] = None,
-    bot: Optional[discord.Client] = None,
-):
-    """
-    Create a quick export of your Discord channel.
-    This function will produce the transcript and post it back in to your channel.
-    :param channel: discord.TextChannel
-    :param guild: (optional) discord.Guild
-    :param bot: (optional) discord.Client
-    :return: discord.Message (posted transcript)
-    """
-
-    if guild:
-        channel.guild = guild
-
-    transcript = (
-        await Transcript(
-            channel=channel,
-            limit=None,
-            messages=None,
-            pytz_timezone="UTC",
-            military_time=True,
-            fancy_times=True,
-            before=None,
-            after=None,
-            support_dev=True,
-            bot=bot,
-            attachment_handler=None
-            ).export()
-        ).html
-
-    if not transcript:
-        return
-
-    transcript_embed = discord.Embed(
-        description=f"**Transcript Name:** transcript-{channel.name}\n\n",
-        colour=discord.Colour.blurple()
-    )
-
-    transcript_file = discord.File(io.BytesIO(transcript.encode()), filename=f"transcript-{channel.name}.html")
-    return await channel.send(embed=transcript_embed, file=transcript_file)
+from chat_exporter.construct.attachment_handler import AttachmentHandler
 
 
 async def export(
-    channel: discord.TextChannel,
+    channel: hikari.TextableGuildChannel,
     limit: Optional[int] = None,
     tz_info="UTC",
-    guild: Optional[discord.Guild] = None,
-    bot: Optional[discord.Client] = None,
+    guild: Optional[hikari.Guild] = None,
+    bot: Optional[hikari.GatewayBot] = None,
     military_time: Optional[bool] = True,
     fancy_times: Optional[bool] = True,
     before: Optional[datetime.datetime] = None,
@@ -101,11 +55,11 @@ async def export(
 
 
 async def raw_export(
-    channel: discord.TextChannel,
-    messages: List[discord.Message],
+    channel: hikari.TextableGuildChannel,
+    messages: List[hikari.Message],
     tz_info="UTC",
-    guild: Optional[discord.Guild] = None,
-    bot: Optional[discord.Client] = None,
+    guild: Optional[hikari.Guild] = None,
+    bot: Optional[hikari.GatewayBot] = None,
     military_time: Optional[bool] = False,
     fancy_times: Optional[bool] = True,
     support_dev: Optional[bool] = True,
