@@ -1,4 +1,4 @@
-from chat_exporter.ext.discord_import import discord
+import hikari
 
 from chat_exporter.ext.discord_utils import DiscordUtils
 from chat_exporter.ext.html_generator import (
@@ -33,13 +33,13 @@ class Component:
     menu_div_id: int = 0
 
     def __init__(self, component, guild):
-        self.component = component
-        self.guild = guild
+        self.component: hikari.PartialComponent = component
+        self.guild: hikari.Guild = guild
 
     async def build_component(self, c):
-        if isinstance(c, discord.Button):
+        if isinstance(c, hikari.ButtonComponent):
             await self.build_button(c)
-        elif isinstance(c, discord.SelectMenu):
+        elif isinstance(c, hikari.TextSelectMenuComponent):
             await self.build_menu(c)
             Component.menu_div_id += 1
 
@@ -54,11 +54,11 @@ class Component:
             icon = ""
             
         label = str(c.label) if c.label else ""
-        style = self.styles[str(c.style).split(".")[1]]
+        style = self.styles[str(c.style).lower()]
         emoji = str(c.emoji) if c.emoji else ""
 
         self.buttons += await fill_out(self.guild, component_button, [
-            ("DISABLED", "chatlog__component-disabled" if c.disabled else "", PARSE_MODE_NONE),
+            ("DISABLED", "chatlog__component-disabled" if c.is_disabled else "", PARSE_MODE_NONE),
             ("URL", url, PARSE_MODE_NONE),
             ("LABEL", label, PARSE_MODE_MARKDOWN),
             ("EMOJI", emoji, PARSE_MODE_EMOJI),
@@ -72,11 +72,11 @@ class Component:
         options = c.options
         content = ""
 
-        if not c.disabled:
+        if not c.is_disabled:
             content = await self.build_menu_options(options)
 
         self.menus += await fill_out(self.guild, component_menu, [
-            ("DISABLED", "chatlog__component-disabled" if c.disabled else "", PARSE_MODE_NONE),
+            ("DISABLED", "chatlog__component-disabled" if c.is_disabled else "", PARSE_MODE_NONE),
             ("ID", str(self.menu_div_id), PARSE_MODE_NONE),
             ("PLACEHOLDER", str(placeholder), PARSE_MODE_MARKDOWN),
             ("CONTENT", str(content), PARSE_MODE_NONE),
@@ -104,8 +104,9 @@ class Component:
         return content
 
     async def flow(self):
-        for c in self.component.children:
-            await self.build_component(c)
+        if hasattr(self.component, "components"):
+            for c in self.component.components:
+                await self.build_component(c)
 
         if self.menus:
             self.components += f'<div class="chatlog__components">{self.menus}</div>'

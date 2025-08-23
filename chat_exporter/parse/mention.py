@@ -1,20 +1,11 @@
 import re
-from typing import Optional
 
 import pytz
 import datetime
 import time
+import hikari
 
-from chat_exporter.ext.discord_import import discord
 from chat_exporter.parse.markdown import ParseMarkdown
-bot: Optional[discord.Client] = None
-
-
-def pass_bot(_bot):
-    # Bot is used to fetch a user who is no longer inside a guild
-    # This will stop the user from appearing as 'Unknown' which some people do not want
-    global bot
-    bot = _bot
 
 
 class ParseMention:
@@ -46,7 +37,7 @@ class ParseMention:
 
     def __init__(self, content, guild):
         self.content = content
-        self.guild = guild
+        self.guild: hikari.Guild = guild
         self.code_blocks_content = []
 
     async def flow(self):
@@ -126,10 +117,10 @@ class ParseMention:
                 if role is None:
                     replacement = '@deleted-role'
                 else:
-                    if role.color.r == 0 and role.color.g == 0 and role.color.b == 0:
+                    if role.color.rgb[0] == 0 and role.color.rgb[1] == 0 and role.color.rgb[2] == 0:
                         colour = "#dee0fc"
                     else:
-                        colour = "#%02x%02x%02x" % (role.color.r, role.color.g, role.color.b)
+                        colour = "#%02x%02x%02x" % role.color.rgb
                     replacement = '<span style="color: %s;">@%s</span>' % (colour, role.name)
                 self.content = self.content.replace(self.content[match.start():match.end()], replacement)
                 match = re.search(regex, self.content)
@@ -155,7 +146,7 @@ class ParseMention:
 
                 member = None
                 try:
-                    member = self.guild.get_member(member_id) or bot.get_user(member_id)
+                    member = self.guild.get_member(member_id)
                     member_name = member.display_name
                 except AttributeError:
                     member_name = member

@@ -1,12 +1,11 @@
 import datetime
 import io
 import pathlib
+import hikari
+import aiohttp
+
 from typing import Union
 import urllib.parse
-
-
-import aiohttp
-from chat_exporter.ext.discord_import import discord
 
 
 class AttachmentHandler:
@@ -14,7 +13,7 @@ class AttachmentHandler:
 
 	Subclass this to implement your own asset handler."""
 
-	async def process_asset(self, attachment: discord.Attachment) -> discord.Attachment:
+	async def process_asset(self, attachment: hikari.Attachment) -> hikari.Attachment:
 		"""Implement this to process the asset and return a url to the stored attachment.
 		:param attachment: discord.Attachment
 		:return: str
@@ -30,12 +29,12 @@ class AttachmentToLocalFileHostHandler(AttachmentHandler):
 		self.base_path = base_path
 		self.url_base = url_base
 
-	async def process_asset(self, attachment: discord.Attachment) -> discord.Attachment:
+	async def process_asset(self, attachment: hikari.Attachment) -> hikari.Attachment:
 		"""Implement this to process the asset and return a url to the stored attachment.
 		:param attachment: discord.Attachment
 		:return: str
 		"""
-		file_name = urllib.parse.quote_plus(f"{datetime.datetime.utcnow().timestamp()}_{attachment.filename}")
+		file_name = urllib.parse.quote_plus(f"{datetime.datetime.now(datetime.UTC).timestamp()}_{attachment.filename}")
 		asset_path = self.base_path / file_name
 		await attachment.save(asset_path)
 		file_url = f"{self.url_base}/{file_name}"
@@ -47,10 +46,10 @@ class AttachmentToLocalFileHostHandler(AttachmentHandler):
 class AttachmentToDiscordChannelHandler(AttachmentHandler):
 	"""Save the attachment to a discord channel and embed the assets in the transcript from there."""
 
-	def __init__(self, channel: discord.TextChannel):
+	def __init__(self, channel: hikari.TextableGuildChannel):
 		self.channel = channel
 
-	async def process_asset(self, attachment: discord.Attachment) -> discord.Attachment:
+	async def process_asset(self, attachment: hikari.Attachment) -> hikari.Attachment:
 		"""Implement this to process the asset and return a url to the stored attachment.
 		:param attachment: discord.Attachment
 		:return: str
@@ -62,9 +61,9 @@ class AttachmentToDiscordChannelHandler(AttachmentHandler):
 						res.raise_for_status()
 					data = io.BytesIO(await res.read())
 					data.seek(0)
-					attach = discord.File(data, attachment.filename)
-					msg: discord.Message = await self.channel.send(file=attach)
+					attach = hikari.files.Bytes(data, attachment.filename)
+					msg: hikari.Message = await self.channel.send(attachment=attach)
 					return msg.attachments[0]
-		except discord.errors.HTTPException as e:
+		except hikari.errors.HTTPError as e:
 			# discords http errors, including missing permissions
 			raise e

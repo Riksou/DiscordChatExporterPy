@@ -1,14 +1,11 @@
 import html
-import io
-import traceback
-from typing import List, Optional, Union
+from typing import List, Optional
 
-import aiohttp
+import hikari
 from pytz import timezone
 from datetime import timedelta
 
 from chat_exporter.construct.attachment_handler import AttachmentHandler
-from chat_exporter.ext.discord_import import discord
 
 from chat_exporter.construct.assets import Attachment, Component, Embed, Reaction
 from chat_exporter.ext.discord_utils import DiscordUtils
@@ -23,7 +20,6 @@ from chat_exporter.ext.html_generator import (
     message_thread,
     message_content,
     message_reference,
-    message_reference_unknown,
     message_interaction,
     img_attachment,
     start_message,
@@ -36,10 +32,10 @@ from chat_exporter.ext.html_generator import (
 )
 
 
-def _gather_user_bot(author: discord.Member):
-    if author.bot and author.public_flags.verified_bot:
+def _gather_user_bot(author: hikari.User):
+    if author.is_bot and author.flags & hikari.UserFlag.VERIFIED_BOT:
         return bot_tag_verified
-    elif author.bot:
+    elif author.is_bot:
         return bot_tag
     return ""
 
@@ -62,11 +58,11 @@ class MessageConstruct:
 
     def __init__(
         self,
-        message: discord.Message,
-        previous_message: Optional[discord.Message],
+        message: hikari.Message,
+        previous_message: Optional[hikari.Message],
         pytz_timezone,
         military_time: bool,
-        guild: discord.Guild,
+        guild: hikari.Guild,
         meta_data: dict,
         message_dict: dict,
         attachment_handler: Optional[AttachmentHandler]
@@ -88,13 +84,13 @@ class MessageConstruct:
     async def construct_message(
         self,
     ) -> (str, dict):
-        if discord.MessageType.pins_add == self.message.type:
+        if hikari.MessageType.CHANNEL_PINNED_MESSAGE == self.message.type:
             await self.build_pin()
-        elif discord.MessageType.thread_created == self.message.type:
+        elif hikari.MessageType.THREAD_CREATED == self.message.type:
             await self.build_thread()
-        elif discord.MessageType.recipient_remove == self.message.type:
+        elif hikari.MessageType.RECIPIENT_REMOVE == self.message.type:
             await self.build_thread_remove()
-        elif discord.MessageType.recipient_add == self.message.type:
+        elif hikari.MessageType.RECIPIENT_ADD == self.message.type:
             await self.build_thread_add()
         else:
             await self.build_message()
@@ -131,17 +127,15 @@ class MessageConstruct:
         if user_id in self.meta_data:
             self.meta_data[user_id][4] += 1
         else:
-            user_name_discriminator = await discriminator(self.message.author.name, self.message.author.discriminator)
+            user_name_discriminator = await discriminator(self.message.author.display_name, self.message.author.discriminator)
             user_created_at = self.message.author.created_at
             user_bot = _gather_user_bot(self.message.author)
-            user_avatar = (
-                self.message.author.display_avatar if self.message.author.display_avatar
-                else DiscordUtils.default_avatar
-            )
+            avatar_url = self.message.author.make_avatar_url()
+            user_avatar = avatar_url if avatar_url else DiscordUtils.default_avatar
             user_joined_at = self.message.author.joined_at if hasattr(self.message.author, "joined_at") else None
             user_display_name = (
                 f'<div class="meta__display-name">{self.message.author.display_name}</div>'
-                if self.message.author.display_name != self.message.author.name
+                if self.message.author.display_name != self.message.author.username
                 else ""
             )
             self.meta_data[user_id] = [
@@ -163,19 +157,12 @@ class MessageConstruct:
         ])
 
     async def build_reference(self):
-        if not self.message.reference:
-            self.message.reference = ""
+        if not self.message.referenced_message:
             return
 
-        message: discord.Message = self.message_dict.get(self.message.reference.message_id)
+        message: hikari.Message = self.message_dict.get(self.message.referenced_message.id)
 
         if not message:
-            try:
-                message: discord.Message = await self.message.channel.fetch_message(self.message.reference.message_id)
-            except (discord.NotFound, discord.HTTPException) as e:
-                self.message.reference = ""
-                if isinstance(e, discord.NotFound):
-                    self.message.reference = message_reference_unknown
                 return
 
         is_bot = _gather_user_bot(message.author)
@@ -183,12 +170,8 @@ class MessageConstruct:
 
         icon = ""
         dummy = ""
-        def get_interaction_status(interaction_message):
-            if hasattr(interaction_message, 'interaction_metadata'):
-                return interaction_message.interaction_metadata
-            return interaction_message.interaction
 
-        interaction_status = get_interaction_status(message)
+        interaction_status = message.interaction_metadata
         if not interaction_status and (message.embeds or message.attachments):
             icon = DiscordUtils.reference_attachment_icon
             dummy = "Click to see attachment"
@@ -204,11 +187,12 @@ class MessageConstruct:
         if message_edited_at:
             message_edited_at = _set_edit_at(message_edited_at)
 
-        avatar_url = message.author.display_avatar if message.author.display_avatar else DiscordUtils.default_avatar
+        generated_avatar_url = message.author.make_avatar_url()
+        avatar_url = generated_avatar_url if generated_avatar_url else DiscordUtils.default_avatar
         self.message.reference = await fill_out(self.guild, message_reference, [
             ("AVATAR_URL", str(avatar_url), PARSE_MODE_NONE),
             ("BOT_TAG", is_bot, PARSE_MODE_NONE),
-            ("NAME_TAG", await discriminator(message.author.name, message.author.discriminator), PARSE_MODE_NONE),
+            ("NAME_TAG", await discriminator(message.author.display_name, message.author.discriminator), PARSE_MODE_NONE),
             ("NAME", str(html.escape(message.author.display_name))),
             ("USER_COLOUR", user_colour, PARSE_MODE_NONE),
             ("CONTENT", message.content.replace("\n", "").replace("<br>", ""), PARSE_MODE_REFERENCE),
@@ -225,23 +209,24 @@ class MessageConstruct:
                 return
             command = "a slash command"
             user = self.message.interaction_metadata.user
-            interaction_id = self.message.interaction_metadata.id
-        elif self.message.interaction:
-            command = f"/{self.message.interaction.name}"
-            user = self.message.interaction.user
-            interaction_id = self.message.interaction.id
+            interaction_id = self.message.interaction_metadata.interaction_id
+        elif self.message.interaction_metadata:
+            command = f"/{self.message.interaction_metadata.type}"
+            user = self.message.interaction_metadata.user
+            interaction_id = self.message.interaction_metadata.interaction_id
         else:
             self.interaction = ""
             return
 
         is_bot = _gather_user_bot(user)
         user_colour = await self._gather_user_colour(user)
-        avatar_url = user.display_avatar if user.display_avatar else DiscordUtils.default_avatar
+        generated_avatar_url = user.make_avatar_url()
+        avatar_url = generated_avatar_url if generated_avatar_url else DiscordUtils.default_avatar
 
         self.interaction = await fill_out(self.guild, message_interaction, [
             ("AVATAR_URL", str(avatar_url), PARSE_MODE_NONE),
             ("BOT_TAG", is_bot, PARSE_MODE_NONE),
-            ("NAME_TAG", await discriminator(user.name, user.discriminator), PARSE_MODE_NONE),
+            ("NAME_TAG", await discriminator(user.display_name, user.discriminator), PARSE_MODE_NONE),
             ("NAME", str(html.escape(user.display_name))),
             ("COMMAND", str(command), PARSE_MODE_NONE),
             ("USER_COLOUR", user_colour, PARSE_MODE_NONE),
@@ -254,13 +239,7 @@ class MessageConstruct:
         if not self.message.stickers or not hasattr(self.message.stickers[0], "url"):
             return
 
-        sticker_image_url = self.message.stickers[0].url
-
-        if sticker_image_url.endswith(".json"):
-            sticker = await self.message.stickers[0].fetch()
-            sticker_image_url = (
-                f"https://cdn.jsdelivr.net/gh/mahtoid/DiscordUtils@master/stickers/{sticker.pack_id}/{sticker.id}.gif"
-            )
+        sticker_image_url = self.message.stickers[0].make_url().url
 
         self.message.content = await fill_out(self.guild, img_attachment, [
             ("ATTACH_URL", str(sticker_image_url), PARSE_MODE_NONE),
@@ -306,8 +285,8 @@ class MessageConstruct:
 
     def _generate_message_divider_check(self):
         return bool(
-            self.previous_message is None or self.message.reference != "" or
-            self.previous_message.type is not discord.MessageType.default or self.interaction != "" or
+            self.previous_message is None or self.message.referenced_message or
+            self.previous_message.type is not hikari.MessageType.DEFAULT or self.interaction != "" or
             self.previous_message.author.id != self.message.author.id or self.message.webhook_id is not None or
             self.message.created_at > (self.previous_message.created_at + timedelta(minutes=4))
         )
@@ -323,9 +302,10 @@ class MessageConstruct:
 
             followup_symbol = ""
             is_bot = _gather_user_bot(self.message.author)
-            avatar_url = self.message.author.display_avatar if self.message.author.display_avatar else DiscordUtils.default_avatar
+            generated_avatar_url = self.message.author.make_avatar_url()
+            avatar_url = generated_avatar_url if generated_avatar_url else DiscordUtils.default_avatar
 
-            if self.message.reference != "" or self.interaction:
+            if self.message.referenced_message or self.interaction:
                 followup_symbol = "<div class='chatlog__followup-symbol'></div>"
 
             time = self.message.created_at
@@ -339,10 +319,10 @@ class MessageConstruct:
 
             self.message_html += await fill_out(self.guild, start_message, [
                 ("REFERENCE_SYMBOL", followup_symbol, PARSE_MODE_NONE),
-                ("REFERENCE", self.message.reference if self.message.reference else self.interaction,
+                ("REFERENCE", self.message.referenced_message if self.message.referenced_message else self.interaction,
                  PARSE_MODE_NONE),
                 ("AVATAR_URL", str(avatar_url), PARSE_MODE_NONE),
-                ("NAME_TAG", await discriminator(self.message.author.name, self.message.author.discriminator), PARSE_MODE_NONE),
+                ("NAME_TAG", await discriminator(self.message.author.display_name, self.message.author.discriminator), PARSE_MODE_NONE),
                 ("USER_ID", str(self.message.author.id)),
                 ("USER_COLOUR", await self._gather_user_colour(self.message.author)),
                 ("USER_ICON", await self._gather_user_icon(self.message.author), PARSE_MODE_NONE),
@@ -365,9 +345,9 @@ class MessageConstruct:
             ("PIN_URL", DiscordUtils.pinned_message_icon, PARSE_MODE_NONE),
             ("USER_COLOUR", await self._gather_user_colour(self.message.author)),
             ("NAME", str(html.escape(self.message.author.display_name))),
-            ("NAME_TAG", await discriminator(self.message.author.name, self.message.author.discriminator), PARSE_MODE_NONE),
+            ("NAME_TAG", await discriminator(self.message.author.display_name, self.message.author.discriminator), PARSE_MODE_NONE),
             ("MESSAGE_ID", str(self.message.id), PARSE_MODE_NONE),
-            ("REF_MESSAGE_ID", str(self.message.reference.message_id) if self.message.reference else "", PARSE_MODE_NONE)
+            ("REF_MESSAGE_ID", str(self.message.referenced_message.id) if self.message.referenced_message else "", PARSE_MODE_NONE)
         ])
 
     async def build_thread_template(self):
@@ -377,60 +357,52 @@ class MessageConstruct:
             ("THREAD_NAME", self.message.content, PARSE_MODE_NONE),
             ("USER_COLOUR", await self._gather_user_colour(self.message.author)),
             ("NAME", str(html.escape(self.message.author.display_name))),
-            ("NAME_TAG", await discriminator(self.message.author.name, self.message.author.discriminator), PARSE_MODE_NONE),
+            ("NAME_TAG", await discriminator(self.message.author.display_name, self.message.author.discriminator), PARSE_MODE_NONE),
             ("MESSAGE_ID", str(self.message.id), PARSE_MODE_NONE),
         ])
 
     async def build_remove(self):
-        removed_member: discord.Member = self.message.mentions[0]
+        removed_member: hikari.Member = self.message.get_member_mentions()[0]
         self.message_html += await fill_out(self.guild, message_thread_remove, [
             ("THREAD_URL", DiscordUtils.thread_remove_recipient,
              PARSE_MODE_NONE),
             ("USER_COLOUR", await self._gather_user_colour(self.message.author)),
             ("NAME", str(html.escape(self.message.author.display_name))),
-            ("NAME_TAG", await discriminator(self.message.author.name, self.message.author.discriminator),
+            ("NAME_TAG", await discriminator(self.message.author.display_name, self.message.author.discriminator),
              PARSE_MODE_NONE),
             ("RECIPIENT_USER_COLOUR", await self._gather_user_colour(removed_member)),
             ("RECIPIENT_NAME", str(html.escape(removed_member.display_name))),
-            ("RECIPIENT_NAME_TAG", await discriminator(removed_member.name, removed_member.discriminator),
+            ("RECIPIENT_NAME_TAG", await discriminator(removed_member.display_name, removed_member.discriminator),
              PARSE_MODE_NONE),
             ("MESSAGE_ID", str(self.message.id), PARSE_MODE_NONE),
         ])
 
     async def build_add(self):
-        removed_member: discord.Member = self.message.mentions[0]
+        removed_member: hikari.Member = self.message.get_member_mentions()[0]
         self.message_html += await fill_out(self.guild, message_thread_add, [
             ("THREAD_URL", DiscordUtils.thread_add_recipient,
              PARSE_MODE_NONE),
             ("USER_COLOUR", await self._gather_user_colour(self.message.author)),
             ("NAME", str(html.escape(self.message.author.display_name))),
-            ("NAME_TAG", await discriminator(self.message.author.name, self.message.author.discriminator),
+            ("NAME_TAG", await discriminator(self.message.author.display_name, self.message.author.discriminator),
              PARSE_MODE_NONE),
             ("RECIPIENT_USER_COLOUR", await self._gather_user_colour(removed_member)),
             ("RECIPIENT_NAME", str(html.escape(removed_member.display_name))),
-            ("RECIPIENT_NAME_TAG", await discriminator(removed_member.name, removed_member.discriminator),
+            ("RECIPIENT_NAME_TAG", await discriminator(removed_member.display_name, removed_member.discriminator),
              PARSE_MODE_NONE),
             ("MESSAGE_ID", str(self.message.id), PARSE_MODE_NONE),
         ])
 
     @cache()
-    async def _gather_member(self, author: discord.Member):
-        member = self.guild.get_member(author.id)
+    async def _gather_member(self, author: hikari.User):
+        return self.guild.get_member(author.id)
 
-        if member:
-            return member
-
-        try:
-            return await self.guild.fetch_member(author.id)
-        except Exception:
-            return None
-
-    async def _gather_user_colour(self, author: discord.Member):
+    async def _gather_user_colour(self, author: hikari.User):
         member = await self._gather_member(author)
-        user_colour = member.colour if member and str(member.colour) != "#000000" else "#FFFFFF"
+        user_colour = member.accent_colour.hex_code if member and member.accent_colour and str(member.accent_colour.hex_code) != "#000000" else "#FFFFFF"
         return f"color: {user_colour};"
 
-    async def _gather_user_icon(self, author: discord.Member):
+    async def _gather_user_icon(self, author: hikari.User):
         member = await self._gather_member(author)
 
         if not member:
@@ -442,10 +414,10 @@ class MessageConstruct:
             return f"<img class='chatlog__role-icon' src='{member.top_role.icon}' alt='Role Icon'>"
         return ""
 
-    def set_time(self, message: Optional[discord.Message] = None):
+    def set_time(self, message: Optional[hikari.Message] = None):
         message = message if message else self.message
         created_at_str = self.to_local_time_str(message.created_at)
-        edited_at_str = self.to_local_time_str(message.edited_at) if message.edited_at else ""
+        edited_at_str = self.to_local_time_str(message.edited_timestamp) if message.edited_timestamp else ""
 
         return created_at_str, edited_at_str
 
@@ -459,27 +431,17 @@ class MessageConstruct:
 
 
 async def gather_messages(
-    messages: List[discord.Message],
-    guild: discord.Guild,
+    messages: List[hikari.Message],
+    guild: hikari.Guild,
     pytz_timezone,
     military_time,
     attachment_handler: Optional[AttachmentHandler],
 ) -> (str, dict):
     message_html: str = ""
     meta_data: dict = {}
-    previous_message: Optional[discord.Message] = None
+    previous_message: Optional[hikari.Message] = None
 
     message_dict = {message.id: message for message in messages}
-
-    if messages and "thread" in str(messages[0].channel.type) and messages[0].reference:
-        channel = guild.get_channel(messages[0].reference.channel_id)
-
-        if not channel:
-            channel = await guild.fetch_channel(messages[0].reference.channel_id)
-
-        message = await channel.fetch_message(messages[0].reference.message_id)
-        messages[0] = message
-        messages[0].reference = None
 
     for message in messages:
         content_html, meta_data = await MessageConstruct(
