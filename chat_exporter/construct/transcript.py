@@ -1,6 +1,5 @@
 import datetime
 import html
-import traceback
 import hikari
 
 import re
