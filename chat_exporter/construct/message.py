@@ -189,7 +189,7 @@ class MessageConstruct:
 
         generated_avatar_url = message.author.make_avatar_url()
         avatar_url = generated_avatar_url if generated_avatar_url else DiscordUtils.default_avatar
-        self.message.reference = await fill_out(self.guild, message_reference, [
+        self.message.referenced_message = await fill_out(self.guild, message_reference, [
             ("AVATAR_URL", str(avatar_url), PARSE_MODE_NONE),
             ("BOT_TAG", is_bot, PARSE_MODE_NONE),
             ("NAME_TAG", await discriminator(message.author.display_name, message.author.discriminator), PARSE_MODE_NONE),
@@ -199,7 +199,7 @@ class MessageConstruct:
             ("EDIT", message_edited_at, PARSE_MODE_NONE),
             ("ICON", icon, PARSE_MODE_NONE),
             ("USER_ID", str(message.author.id), PARSE_MODE_NONE),
-            ("MESSAGE_ID", str(self.message.reference.message_id), PARSE_MODE_NONE),
+            ("MESSAGE_ID", str(self.message.referenced_message.id), PARSE_MODE_NONE),
         ])
 
     async def build_interaction(self):
@@ -399,8 +399,16 @@ class MessageConstruct:
 
     async def _gather_user_colour(self, author: hikari.User):
         member = await self._gather_member(author)
-        user_colour = member.accent_colour.hex_code if member and member.accent_colour and str(member.accent_colour.hex_code) != "#000000" else "#FFFFFF"
-        return f"color: {user_colour};"
+        color = None
+        for role in sorted(member.get_roles(), key=lambda r: r.position, reverse=True):
+            if role.color.hex_code != "#000000":
+                color = role.color.hex_code
+                break
+
+        if not color:
+            color = "#FFFFFF"
+
+        return f"color: {color};"
 
     async def _gather_user_icon(self, author: hikari.User):
         member = await self._gather_member(author)
