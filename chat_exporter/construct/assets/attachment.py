@@ -1,5 +1,7 @@
 import math
 
+import hikari
+
 from chat_exporter.ext.discord_utils import DiscordUtils
 from chat_exporter.ext.html_generator import (
     fill_out,
@@ -13,7 +15,7 @@ from chat_exporter.ext.html_generator import (
 
 class Attachment:
     def __init__(self, attachments, guild):
-        self.attachments = attachments
+        self.attachments: hikari.Attachment = attachments
         self.guild = guild
 
     async def flow(self):
@@ -21,12 +23,12 @@ class Attachment:
         return self.attachments
 
     async def build_attachment(self):
-        if self.attachments.content_type is not None:
-            if "image" in self.attachments.content_type:
+        if self.attachments.media_type is not None:
+            if "image" in self.attachments.media_type:
                 return await self.image()
-            elif "video" in self.attachments.content_type:
+            elif "video" in self.attachments.media_type:
                 return await self.video()
-            elif "audio" in self.attachments.content_type:
+            elif "audio" in self.attachments.media_type:
                 return await self.audio()
         await self.file()
 
